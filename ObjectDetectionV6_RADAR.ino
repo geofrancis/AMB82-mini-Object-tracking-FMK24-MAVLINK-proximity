@@ -44,8 +44,10 @@ float pitch = 0;
 char messages[50];
 
 
-uint16_t distancey[20];
-uint16_t x[20];
+
+unsigned long previousMil = 0; 
+const long inter = 3000;
+
 
 int steering = 0;
 int range = 0;
@@ -90,10 +92,21 @@ int status = WL_IDLE_STATUS;
 IPAddress ip;
 int rtsp_portnum;
 
+int R;
+
+#include <ArduinoSort.h>
+
+const int send = 11;
+
 void setup() {
   Serial.begin(115200);
   Serial3.begin(115200);  //RXTX from Pixhawk
   Serial2.begin(57600);   //RADAR
+
+ pinMode(send, OUTPUT);
+ digitalWrite(send, LOW);
+
+
   // attempt to connect to Wifi network:
   while (status != WL_CONNECTED) {
     Serial.print("Attempting to connect to WPA SSID: ");
@@ -152,52 +165,51 @@ void setup() {
 
 
   memset(distances, UINT16_MAX, sizeof(distances));  // Filling the distances array with UINT16_MAX
+
+ 
+
+  uint8_t system_id = 1;
+  uint8_t component_id = 2;
+  uint8_t severity = 1;
+  uint16_t id = 0;
+  uint8_t chunk_seq = 0;
+
+  mavlink_message_t msg;
+  uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+  mavlink_msg_statustext_pack(system_id, component_id, &msg, 0, "CAMERA ONLINE", id, chunk_seq);
+  uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+  Serial3.write(buf, len);
+
+
 }
 
 void loop() {
   RADAR();
+  HEARTBEAT();
+}
 
-
-
-
-
+void HEARTBEAT() {
 
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis2 >= interval2) {
     previousMillis2 = currentMillis;
-    int sysid = 1;
-    //< The component sending the message.
-    int compid = 196;
-    uint64_t time_usec = 0;
-    uint8_t sensor_type = 0;
-    distances[steering] = range;  //UINT16_MAX gets updated with actual distance values
-    uint8_t increment = 2;
-    uint16_t min_distance = 200;
-    uint16_t max_distance = 20000;
-    float increment_f = 0;
-    float angle_offset = -60;
-    uint8_t frame = 12;
-
-
-    // Initialize the required buffers
     mavlink_message_t msg;
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
-    // Pack the message
-
-    uint8_t system_type = MAV_TYPE_GENERIC;
     uint8_t autopilot_type = MAV_AUTOPILOT_INVALID;
     uint8_t system_mode = MAV_MODE_PREFLIGHT;  ///< Booting up
     uint32_t custom_mode = 30;                 ///< Custom mode, can be defined by user/adopter
     uint8_t system_state = MAV_STATE_STANDBY;  ///< System ready for flight
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-    mavlink_msg_heartbeat_pack(1, 196, &msg, 0, autopilot_type, system_mode, custom_mode, system_state);
+    mavlink_msg_heartbeat_pack(1, 197, &msg, 0, autopilot_type, system_mode, custom_mode, system_state);
     len = mavlink_msg_to_send_buffer(buf, &msg);
+
+    digitalWrite(send, HIGH);
+    delay(10);
     Serial3.write(buf, len);
+    Serial3.flush();
+    digitalWrite(send, LOW);
   }
 }
-
-
-
 
 void RADAR() {
   target = Serial2.parseInt();  //dataIn now holds 0
@@ -259,11 +271,13 @@ void ODPostProcess(std::vector<ObjectDetectionResult> results) {
         printf("Item %d %s:\t%d %d %d %d\n\r", i, itemList[obj_type].objectName, xmin, xmax, ymin, ymax);
         OSD.drawRect(CHANNEL, xmin, ymin, xmax, ymax, 3, OSD_COLOR_WHITE);
 
+
         // Print identification text
         char text_str[20];
-        snprintf(text_str, sizeof(text_str), "%s %d", itemList[obj_type].objectName, item.score());
+        snprintf(text_str, sizeof(text_str), "%s %d", itemList[obj_type].objectName, targets[i] );
         OSD.drawText(CHANNEL, xmin, ymin - OSD.getTextHeight(CHANNEL), text_str, OSD_COLOR_CYAN);
-
+        uint16_t distancey[20];
+        uint16_t x[20];
 
         //send mavlink message
         distancey[i] = ymin;
@@ -275,24 +289,38 @@ void ODPostProcess(std::vector<ObjectDetectionResult> results) {
 
         x[i] = (xmin + ((xmax - xmin) / 2));
 
-        /*
-        int count = sizeof(distancey) / sizeof(distancey[0]);
-        int closestObject = count;
-        int closestObjectValue = 0;
+        //sortArray(distancey, 20);
 
-        for (int i = 0; i < count; i++) {
-          if (distancey[i] > closestObjectValue) {
-            closestObjectValue = distancey[i];
-            closestObject = i;
-          }
-        }*/
-        //  Serial.print("distance ");
-        //  Serial.println(closestObjectValue);
-        // Serial.print("X closest ");
-        // Serial.println(x[closestObject]);
-        //    Serial.print("Closest object");
-        //    Serial.println(closestObject);
+
+        Serial.print("distancey ");
+        Serial.println(distancey[i]);
         steering = map(x[i], 0, 1920, 0, 60);
+
+unsigned long currentMillis = millis();
+
+  if (currentMillis - previousMil >= inter) {
+    // save the last time you blinked the LED
+    previousMil = currentMillis;
+
+       
+
+  uint8_t system_id = 1;
+  uint8_t component_id = 197;
+  uint8_t severity = 1;
+  uint16_t id = 0;
+  uint8_t chunk_seq = 0;
+
+  mavlink_message_t msg;
+  uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+  mavlink_msg_statustext_pack(system_id, component_id, &msg, 0, text_str, id, chunk_seq);
+  uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+  Serial3.write(buf, len);
+    }
+      
+        
+      
+    
+
 
     // Initialize the required buffers
     mavlink_message_t msg;
@@ -301,7 +329,7 @@ void ODPostProcess(std::vector<ObjectDetectionResult> results) {
     Serial.println("target sent");
     int sysid = 1;
     //< The component sending the message.
-    int compid = 196;
+    int compid = 197;
     uint64_t time_usec = 0;
     uint8_t sensor_type = 0;
     distances[steering] = targets[i];  //UINT16_MAX gets updated with actual distance values
@@ -313,22 +341,30 @@ void ODPostProcess(std::vector<ObjectDetectionResult> results) {
     uint8_t frame = 12;
     mavlink_msg_obstacle_distance_pack(sysid, compid, &msg, time_usec, sensor_type, distances, increment, min_distance, max_distance, increment_f, angle_offset, frame);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+
+    digitalWrite(send, HIGH);
+    delay(10);
     Serial3.write(buf, len);
-        Serial.print("Steering ");
-        Serial.println(steering);
-        Serial.print("targets");
-        Serial.println(targets[i]);
+    Serial3.flush();
+    digitalWrite(send, LOW);
 
-        Serial.println();
-      }
-    }
 
-  memset(distances, UINT16_MAX, sizeof(distances));
+    Serial.print("Steering ");
+    Serial.println(steering);
+    Serial.print("targets");
+    Serial.println(targets[i]);
+
+    Serial.println();
+
+
+    memset(distances, UINT16_MAX, sizeof(distances));
     targets[1] = 0;
     targets[2] = 0;
     targets[3] = 0;
     targets[4] = 0;
     targets[5] = 0;
     OSD.update(CHANNEL);
+  }
+}
   }
 }
